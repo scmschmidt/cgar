@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+cgar_log2csv
+
+Reads `cgar_collect` log and prints data as CSV to stdout.
+
+ToDo:
+----
+    - Make a global dict with all the attribute, header translation, etc. to have
+      a central place to change when adding new attributes.
+    - Add some comments and a description at the beginning , how to add new attributes! 
+    - Add support for multiple cgroups!
+    - Add timestamp support.
+
+
+Ideas:
+------
+    - Support several date and time formats.
+
+
+Changelog:
+----------
+    05.02.2023      v0.1beta        - first bits are done
+
+"""
+
+import argparse
+import json
+import os
+import sys
+
+
+__version__ = '0.1beta'
+
+
+def argument_parse():
+    """Evaluates the command line arguments."""
+
+    supported = {'memory': set(['memory.current', 'memory.swap.current', 'memory.pressure'])}
+
+
+    parser = argparse. ArgumentParser(prog=os.path.basename(sys.argv[0]), 
+                       description='Extracts cgroup data from cgar collector log and prints them as CSV on stdout.',
+                       add_help=True,
+                       epilog=f'v{__version__}')
+
+    # Global flags and arguments.   
+    # parser.add_argument('-t', '--time',
+    #                     dest='time',
+    #                     action='store',
+    #                     required=False,
+    #                     help='time range (NEED TO BE ADDED)')    
+    parser.add_argument('-l', '--log',
+                        dest='logfile',
+                        type=str,
+                        action='store',
+                        required=False,
+                        default='/var/log/cgar/cgar',
+                        help='logfile to parse (default: "/var/log/cgar/cgar")')    
+    parser.add_argument('-f', '--filter',
+                        dest='filter',
+                        type=str,
+                        action='append',
+                        required=False,
+                        help='use only these controller attributes')  
+    parser.add_argument('-s', '--separator',
+                        dest='separator',
+                        type=str,
+                        action='store',
+                        default=',',
+                        required=False,
+                        help='separator for the output (default: ,')  
+    parser.add_argument('--quote-strings',
+                        dest='quotestrings',
+                        action='store_true',
+                        default=False,
+                        required=False,
+                        help='if strings in CSV output shall be quoted (default: false')  
+    parser.add_argument('controller',
+                        metavar='CONTROLLER',
+                        type=str,
+                        choices=supported,
+                        help='extract data for this cgroup controller')
+    parser.add_argument('cgroup', 
+                        metavar='CGROUP',
+                        nargs='+',
+                        type=str,
+                        help='extract data for this cgroup'),
+
+    args = parser.parse_args()
+
+    # Check that only valid attributes are listed for the filter
+    # and set the attributes we want to extract.
+    if args.filter:
+        if set(args.filter) - supported[args.controller]:
+            print(f'''Unsupported filter found! Only supported are: {', '.join(supported[args.controller])}''')
+            return 1     
+        args.attributes = set(args.filter)
+    else:
+        args.attributes = supported[args.controller]
+
+    # Check if the logfile is available.
+    if not os.path.isfile(args.logfile) and os.access(args.logfile):
+        print(f'Logfile "{args.logfile}" does not exists!')
+        return 1     
+
+    return args
+
+
+def convert(attr: str, value: str) -> dict:
+    """Takes a cgroup attribute value pair and returns a dict
+    with the attribute columns and normalized values."""
+
+    try:
+        if attr in ['memory.current', 'memory.swap.current']:
+            return { attr : int(value) } 
+        elif attr == 'memory.pressure':
+            # some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+            # full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+            some, full = value.split('\n')
+            some_comp = some.split()
+            full_comp = some.split()
+            return {f'{attr}::some_avg10': float(some_comp[1].split('=')[1]),
+                    f'{attr}::some_avg60': float(some_comp[2].split('=')[1]),
+                    f'{attr}::some_avg300': float(some_comp[3].split('=')[1]),
+                    f'{attr}::some_total': float(some_comp[4].split('=')[1]),
+                    f'{attr}::full_avg10': float(full_comp[1].split('=')[1]),
+                    f'{attr}::full_avg60': float(full_comp[2].split('=')[1]),
+                    f'{attr}::full_avg300': float(full_comp[3].split('=')[1]),
+                    f'{attr}::full_total': float(full_comp[4].split('=')[1])
+                   }
+        else:
+            print(f'Conversion of cgroup attribute found unknown attribute: {attr}', file=sys.stderr)           
+    except Exception as err:
+        print(f'Conversion of cgroup attribute value "{attr} = {value}" failed: {err}', file=sys.stderr)
+        return None
+
+
+def print_csv(cols: list, separator: str = ',', quote_string : bool = True) -> None:
+    """Prints list as CSV row."""
+
+    cols_transformed = []
+
+    # Transform certain data types.
+    for col in cols:
+        if quote_string and isinstance(col, str):
+            cols_transformed.append(f'"{col}"')   # surround strings with quotes
+        else:
+            cols_transformed.append(str(col))     
+    print(separator.join(cols_transformed))
+
+
+def main() -> int:
+
+    # Parse command line arguments.
+    arguments = argument_parse()
+
+    try: 
+        with open(arguments.logfile, 'r') as f:
+
+            attrib2header = {'memory.current': ['memory.current'], 
+                            'memory.swap.current': ['memory.swap.current'], 
+                            'memory.pressure' : ['memory.pressure::some_avg10', 
+                                                'memory.pressure::some_avg60',
+                                                'memory.pressure::some_avg300', 
+                                                'memory.pressure::some_total',
+                                                'memory.pressure::full_avg10'
+                                                'memory.pressure::full_avg60',
+                                                'memory.pressure::full_avg300',
+                                                'memory.pressure::full_total']}
+
+            # ! Add support for multiple cgroups!
+            cgroup = arguments.cgroup[0]
+
+            # Print the CSV header first.
+            headers = []
+            for attrib in arguments.attributes:
+                headers.extend(attrib2header[attrib])
+            print_csv(['timestamp'] + headers, separator=arguments.separator, quote_string=arguments.quotestrings)
+
+            # Iterate over log (one JSON object each line).
+            for line in f:
+                
+                # Usually each line has only one timestamp and dataset, but
+                # maybe this will change.
+                for timestamp, dataset in json.loads(line).items():
+                
+                    # TODO: CHECK IF TIMESTAMP IS IN RANGE...
+
+                    # Skip if the requested cgroup is not in the data set.
+                    if cgroup not in dataset:
+                        print(f'Cgroup "{cgroup}" not in this data set.')
+                        continue 
+
+                    # Extract the attributes we want.
+                    attributes = {}
+                    for attribute in arguments.attributes:
+                        attributes.update(convert(attribute, dataset[cgroup][attribute]))
+                        
+                    # Print a value row.    
+                    row = [timestamp]
+                    for header in headers:
+                        if header in attributes: 
+                            row.append(attributes[header])
+                        else:
+                            row.append('-')   # attribute not found in current dataset
+                    print_csv(row, separator=arguments.separator, quote_string=arguments.quotestrings)
+    except Exception as err:
+        print(f'Sadly a runtime error ocurred: {err}')
+        return 3  
+
+    # Bye.        
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

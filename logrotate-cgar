@@ -1,0 +1,9 @@
+/var/log/cgar/cgar {
+    rotate 28
+    daily
+    compress
+    missingok
+    nocreate
+    dateext
+    dateformat -%Y-%m-%dT%H:%M:%S
+}

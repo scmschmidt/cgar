@@ -1,0 +1,10 @@
+{
+    "logfile": "/var/log/cgar/cgar",
+    "collect": [
+        {
+            "cgroup": "",
+            "depth": 100,
+            "controllers": ["memory"]
+        }
+    ]
+}

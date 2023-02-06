@@ -1,0 +1,6 @@
+[Unit]
+Description=Collect cgroup data (cgar)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cgar_collect

@@ -1,0 +1,9 @@
+[Unit]
+Description=Collect cgroup data (cgar)
+
+[Timer]
+OnCalendar=*:0/1
+Unit=cgar_collect.service
+
+[Install]
+WantedBy=multi-user.target
