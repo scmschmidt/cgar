@@ -9,6 +9,7 @@ With `systemd` already partitioning user processes and services into a defined h
 
 The data can be used to track and investigate resource consumptions.
 
+> You can find a very simple example of an extracted csv and a generated png in `examples/'. \
 
 **This project is in an early stage and has limited support for cgroup controllers. Depending on the reception it made grow in the future.**
 
@@ -137,7 +138,7 @@ For now we only collect:
 - `memory.swap.high`
 - `memory.swap.max`
 
-((`cgar_log2csv` does not yet knows all of them!))
+> *`cgar_log2csv` currently only knows about `memory.current`, `memory.swap.current` and `memory.pressure`!*
 
 
 ## Installation
@@ -266,23 +267,42 @@ For now we only collect:
 
 For now we have a large log with JSON objects containing all the data we wanted. If you have something which can process JSON data, you already can go ahead. If not, the next step might be to get a readable table.
 
-For this `cgar_log2csv` exists. \
-It reads a log and prints it as CSV to stdout after applying filters to reduce the data:
+For this `cgar_log2csv` exists. It reads a log and prints it as CSV to stdout after applying filters to reduce the data:
 
 ```
-((ADD HELP HERE))
+usage: cgar_log2csv [-h] [--start-time TIME] [--end-time TIME] [-l LOGFILE]
+                    [-f FILTER] [-s SEPARATOR] [--quote-strings]
+                    [--group-by {cgroup,attribute}]
+                    CONTROLLER CGROUP [CGROUP ...]
+
+Extracts cgroup data from cgar collector log and prints them as CSV on stdout.
+
+positional arguments:
+  CONTROLLER            extract data for this cgroup controller
+  CGROUP                extract data for this cgroup
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --start-time TIME     only print data from this time forward (no timezone
+                        info)
+  --end-time TIME       only print data to this time (no timezone info)
+  -l LOGFILE, --log LOGFILE
+                        logfile to parse (default: "/var/log/cgar/cgar")
+  -f FILTER, --filter FILTER
+                        use only these controller attributes
+  -s SEPARATOR, --separator SEPARATOR
+                        separator for the output (default: ,
+  --quote-strings       if strings in CSV output shall be quoted (default:
+                        false
+  --group-by {cgroup,attribute}
+                        how cgroup attribute columns shall be grouped
+                        (default: cgroup
+
+v0.1beta
 ```
 
 Such a file can easily be read into a spreadsheet program like LibreOffice or Excel to draw nice graphs for example.
-But you don't need an entire spreadsheet program to dram some graphs. This can easily be achieved with `gnuplot` as well.
-
-This is all very theoretically. Let's have a more practical example:
-
-Let's assume, you noticed the use of swap recently and now want to figure out, which application was swapped out and which one consumed much memory. \
-
-((CONTINUE WITH EXAMPLE))
-
-
+But you don't need an entire spreadsheet program to draw some graphs. This can easily be achieved with `gnuplot` as well.
 
 ## What To Do to Add New Cgroup Data?
 
@@ -301,6 +321,6 @@ exchange the binary on the system.
 
    |||
    |-|-|
-   | 06.02.2023 | First release on GitHub. `cgar_collect` works, `cgar_log2csv` needs a bit work. |
+   | 06.02.2023 | First release on GitHub. `cgar_collect` works, `cgar_log2csv` needs a bit polishing. |
 
 ...

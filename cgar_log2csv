@@ -11,13 +11,14 @@ ToDo:
     - Make a global dict with all the attribute, header translation, etc. to have
       a central place to change when adding new attributes.
     - Add some comments and a description at the beginning , how to add new attributes! 
-    - Add support for multiple cgroups!
-    - Add timestamp support.
+    
 
 
 Ideas:
 ------
-    - Support several date and time formats.
+    - Be more flexible with date and time.
+    - Add converters (Byte to KiB, etc.).
+    - Support wildcards to easily select children (e.g. 'system.slice/*' or 'system.slice/*.service')
 
 
 Changelog:
@@ -27,6 +28,7 @@ Changelog:
 """
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -47,11 +49,20 @@ def argument_parse():
                        epilog=f'v{__version__}')
 
     # Global flags and arguments.   
-    # parser.add_argument('-t', '--time',
-    #                     dest='time',
-    #                     action='store',
-    #                     required=False,
-    #                     help='time range (NEED TO BE ADDED)')    
+    parser.add_argument('--start-time',
+                        metavar='TIME',
+                        dest='start_time',
+                        type=str,
+                        action='store',
+                        required=False,
+                        help='only print data from this time forward (no timezone info)')   
+    parser.add_argument('--end-time',
+                        metavar='TIME',
+                        dest='end_time',
+                        type=str,
+                        action='store',
+                        required=False,
+                        help='only print data to this time (no timezone info)')
     parser.add_argument('-l', '--log',
                         dest='logfile',
                         type=str,
@@ -77,13 +88,19 @@ def argument_parse():
                         action='store_true',
                         default=False,
                         required=False,
-                        help='if strings in CSV output shall be quoted (default: false')  
+                        help='if strings in CSV output shall be quoted (default: false')
+    parser.add_argument('--group-by',
+                        dest='group_by',
+                        default='cgroup',
+                        choices=['cgroup', 'attribute'],
+                        required=False,
+                        help='how cgroup attribute columns shall be grouped (default: cgroup')  
     parser.add_argument('controller',
                         metavar='CONTROLLER',
                         type=str,
                         choices=supported,
                         help='extract data for this cgroup controller')
-    parser.add_argument('cgroup', 
+    parser.add_argument('cgroups', 
                         metavar='CGROUP',
                         nargs='+',
                         type=str,
@@ -91,12 +108,21 @@ def argument_parse():
 
     args = parser.parse_args()
 
+    # Convert times into datetime objects
+    try:
+        args.time_range = (
+            datetime.datetime.strptime(args.start_time, '%Y-%m-%dT%H:%M:%S') if args.start_time else None,
+            datetime.datetime.strptime(args.end_time, '%Y-%m-%dT%H:%M:%S') if args.end_time else None)
+    except Exception as err:
+        print(f'Error in time range: {err}')
+        sys.exit(1)  
+
     # Check that only valid attributes are listed for the filter
     # and set the attributes we want to extract.
     if args.filter:
         if set(args.filter) - supported[args.controller]:
             print(f'''Unsupported filter found! Only supported are: {', '.join(supported[args.controller])}''')
-            return 1     
+            sys.exit(0)     
         args.attributes = set(args.filter)
     else:
         args.attributes = supported[args.controller]
@@ -104,7 +130,7 @@ def argument_parse():
     # Check if the logfile is available.
     if not os.path.isfile(args.logfile) and os.access(args.logfile):
         print(f'Logfile "{args.logfile}" does not exists!')
-        return 1     
+        sys.exit(0)     
 
     return args
 
@@ -171,14 +197,14 @@ def main() -> int:
                                                 'memory.pressure::full_avg300',
                                                 'memory.pressure::full_total']}
 
-            # ! Add support for multiple cgroups!
-            cgroup = arguments.cgroup[0]
-
+            # Build ordered headers.
+            if arguments.group_by == 'attribute':
+                headers =[(cg, attrib) for attrib in arguments.attributes for cg in arguments.cgroups]
+            else:
+                headers =[(cg, attrib) for cg in arguments.cgroups for attrib in arguments.attributes]
+            
             # Print the CSV header first.
-            headers = []
-            for attrib in arguments.attributes:
-                headers.extend(attrib2header[attrib])
-            print_csv(['timestamp'] + headers, separator=arguments.separator, quote_string=arguments.quotestrings)
+            print_csv(['timestamp'] + ['::'.join(h) for h in headers], separator=arguments.separator, quote_string=arguments.quotestrings)
 
             # Iterate over log (one JSON object each line).
             for line in f:
@@ -187,33 +213,43 @@ def main() -> int:
                 # maybe this will change.
                 for timestamp, dataset in json.loads(line).items():
                 
-                    # TODO: CHECK IF TIMESTAMP IS IN RANGE...
+                    # Check if entry is in given time range.
+                    timestamp_short = datetime.datetime.strptime(timestamp[:19], '%Y-%m-%dT%H:%M:%S')
+                    if arguments.time_range[0] and timestamp_short < arguments.time_range[0]:
+                        continue
+                    if arguments.time_range[1] and timestamp_short > arguments.time_range[1]:
+                        continue
 
-                    # Skip if the requested cgroup is not in the data set.
-                    if cgroup not in dataset:
-                        print(f'Cgroup "{cgroup}" not in this data set.')
-                        continue 
+                    cgroup_data = {}
+                    for cgroup in arguments.cgroups:
 
-                    # Extract the attributes we want.
-                    attributes = {}
-                    for attribute in arguments.attributes:
-                        attributes.update(convert(attribute, dataset[cgroup][attribute]))
-                        
+                        cgroup_data[cgroup] = {}
+
+                        # Skip if the requested cgroup is not in the data set.
+                        if cgroup not in dataset:
+                            print(f'Cgroup "{cgroup}" not in this data set.')
+                            continue 
+
+                        # Extract the attributes we want.
+                        for attribute in arguments.attributes:
+                            cgroup_data[cgroup].update(convert(attribute, dataset[cgroup][attribute]))
+
                     # Print a value row.    
                     row = [timestamp]
-                    for header in headers:
-                        if header in attributes: 
-                            row.append(attributes[header])
+                    for cg, attrib in headers:
+                        if attrib in cgroup_data[cg]: 
+                            row.append(cgroup_data[cg][attrib])
                         else:
                             row.append('-')   # attribute not found in current dataset
                     print_csv(row, separator=arguments.separator, quote_string=arguments.quotestrings)
+                
     except Exception as err:
         print(f'Sadly a runtime error ocurred: {err}')
-        return 3  
+        sys.exit(3)  
 
     # Bye.        
-    return 0
+    sys.exit(0)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
