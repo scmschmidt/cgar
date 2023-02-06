@@ -6,12 +6,13 @@ cgar_log2csv
 
 Reads `cgar_collect` log and prints data as CSV to stdout.
 
-ToDo:
-----
-    - Make a global dict with all the attribute, header translation, etc. to have
-      a central place to change when adding new attributes.
-    - Add some comments and a description at the beginning , how to add new attributes! 
-    
+
+If new controllers or controllerfiles need to be added:
+------------------------------------------------------
+
+1. Extend global dictionary `ATTRIBUTE_MAP`.
+
+2. Add support for the controller file in `convert()`
 
 
 Ideas:
@@ -19,29 +20,52 @@ Ideas:
     - Be more flexible with date and time.
     - Add converters (Byte to KiB, etc.).
     - Support wildcards to easily select children (e.g. 'system.slice/*' or 'system.slice/*.service')
+    - Check if the tool can handle logs where the content (added/removed cgroups/controllers) has changed.
 
 
 Changelog:
 ----------
     05.02.2023      v0.1beta        - first bits are done
-
+    05.02.2023      v0.2            - fixed bug where complex attributes (like `memory.pressure`)
+                                      have not been resolved
+                                    - introduced global cgroup attribute mapping for easier extensibility
+                                    - fixed classic BrokenPipeError error
+                                    - dared to remove beta status
 """
 
 import argparse
 import datetime
 import json
 import os
+import re
 import sys
+from pprint import pprint
 
+__version__ = '0.2'
 
-__version__ = '0.1beta'
+# This map must have listed each supported cgroup controller as key and as value a dictionary
+# with supported controller files as key and the output representation (column) as value.
+# Most of the time this will be a one to one mapping, but some complex files contain multiple
+# entries and shall be separated into individual columns.
+# The `convert()` function must return the resolved columns!
+ATTRIBUTE_MAP = {'memory': {'memory.current': ['memory.current'], 
+                            'memory.swap.current': ['memory.swap.current'], 
+                            'memory.pressure' : ['memory.pressure::some_avg10', 
+                                                 'memory.pressure::some_avg60',
+                                                 'memory.pressure::some_avg300', 
+                                                 'memory.pressure::some_total',
+                                                 'memory.pressure::full_avg10',
+                                                 'memory.pressure::full_avg60',
+                                                 'memory.pressure::full_avg300',
+                                                 'memory.pressure::full_total']
+                           }
+                }
 
 
 def argument_parse():
     """Evaluates the command line arguments."""
 
-    supported = {'memory': set(['memory.current', 'memory.swap.current', 'memory.pressure'])}
-
+    supported = {k: set(v.keys()) for (k, v) in ATTRIBUTE_MAP.items()}
 
     parser = argparse. ArgumentParser(prog=os.path.basename(sys.argv[0]), 
                        description='Extracts cgroup data from cgar collector log and prints them as CSV on stdout.',
@@ -178,31 +202,23 @@ def print_csv(cols: list, separator: str = ',', quote_string : bool = True) -> N
     print(separator.join(cols_transformed))
 
 
-def main() -> int:
+def main():
 
     # Parse command line arguments.
     arguments = argument_parse()
 
     try: 
         with open(arguments.logfile, 'r') as f:
-
-            attrib2header = {'memory.current': ['memory.current'], 
-                            'memory.swap.current': ['memory.swap.current'], 
-                            'memory.pressure' : ['memory.pressure::some_avg10', 
-                                                'memory.pressure::some_avg60',
-                                                'memory.pressure::some_avg300', 
-                                                'memory.pressure::some_total',
-                                                'memory.pressure::full_avg10'
-                                                'memory.pressure::full_avg60',
-                                                'memory.pressure::full_avg300',
-                                                'memory.pressure::full_total']}
-
-            # Build ordered headers.
-            if arguments.group_by == 'attribute':
-                headers =[(cg, attrib) for attrib in arguments.attributes for cg in arguments.cgroups]
-            else:
-                headers =[(cg, attrib) for cg in arguments.cgroups for attrib in arguments.attributes]
             
+            attrib2header = {attrib: attrib_resolved for controller_files in ATTRIBUTE_MAP.values() for attrib, attrib_resolved in controller_files.items()}
+            
+            # Build ordered headers.
+            attributes_resolved = [item for sublist in [attrib2header[attr] for attr in arguments.attributes] for item in sublist]
+            if arguments.group_by == 'attribute':
+                headers =[(cg, attrib) for attrib in attributes_resolved for cg in arguments.cgroups]
+            else:
+                headers =[(cg, attrib) for cg in arguments.cgroups for attrib in attributes_resolved]
+
             # Print the CSV header first.
             print_csv(['timestamp'] + ['::'.join(h) for h in headers], separator=arguments.separator, quote_string=arguments.quotestrings)
 
@@ -220,20 +236,28 @@ def main() -> int:
                     if arguments.time_range[1] and timestamp_short > arguments.time_range[1]:
                         continue
 
+                    # ! Works, but the header still contain regex! They need expansion too. :-/
+                    # # Expand cgroup arguments (regex) with current dataset.
+                    # expanded_cgroups = []
+                    # for cgroup in arguments.cgroups:
+                    #     expanded_cgroups.extend([cg for cg in dataset.keys() if re.search(cgroup, cg)])
+                    
                     cgroup_data = {}
                     for cgroup in arguments.cgroups:
-
+                    #for cgroup in expanded_cgroups:    # ! for a time when regex expansion works
+   
                         cgroup_data[cgroup] = {}
 
                         # Skip if the requested cgroup is not in the data set.
+                        # ! Do we need this after we expanded argument with dataset?
                         if cgroup not in dataset:
                             print(f'Cgroup "{cgroup}" not in this data set.')
                             continue 
-
+                        
                         # Extract the attributes we want.
                         for attribute in arguments.attributes:
                             cgroup_data[cgroup].update(convert(attribute, dataset[cgroup][attribute]))
-
+                    
                     # Print a value row.    
                     row = [timestamp]
                     for cg, attrib in headers:
@@ -243,6 +267,12 @@ def main() -> int:
                             row.append('-')   # attribute not found in current dataset
                     print_csv(row, separator=arguments.separator, quote_string=arguments.quotestrings)
                 
+    except BrokenPipeError:
+        # Handle BrokenPipe issue: https://docs.python.org/3/library/signal.html#note-on-sigpipe
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(0)
+
     except Exception as err:
         print(f'Sadly a runtime error ocurred: {err}')
         sys.exit(3)  

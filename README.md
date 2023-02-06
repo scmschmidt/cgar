@@ -7,7 +7,7 @@ Do you know `sar`? If so, you get a pretty good idea what `cgar` shall be!
 Instead of collecting system resource data, `cgar` will collect data of cgroups.
 With `systemd` already partitioning user processes and services into a defined hierarchy, the data is already there and just needs to be collected and processed.
 
-The data can be used to track and investigate resource consumptions.
+The data can be used to track and investigate resource consumption.
 
 > You can find a very simple example of an extracted csv and a generated png in `examples/'. \
 
@@ -322,5 +322,6 @@ exchange the binary on the system.
    |||
    |-|-|
    | 06.02.2023 | First release on GitHub. `cgar_collect` works, `cgar_log2csv` needs a bit polishing. |
+   | 06.02.2023 | `cgar_log2csv`: v0.2 released
 
 ...
