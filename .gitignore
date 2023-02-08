@@ -15,5 +15,7 @@
 # vendor/
 
 *.code-workspace
-
 [Pp]layground
+attic/
+
+examples/Investigate My System/

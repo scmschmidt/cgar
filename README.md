@@ -9,7 +9,7 @@ With `systemd` already partitioning user processes and services into a defined h
 
 The data can be used to track and investigate resource consumption.
 
-> You can find a very simple example of an extracted csv and a generated png in `examples/'. \
+I have put together some examples in [`examples/`](examples/) to show for what `cgar` can be useful.
 
 **This project is in an early stage and has limited support for cgroup controllers. Depending on the reception it made grow in the future.**
 
@@ -271,14 +271,13 @@ For this `cgar_log2csv` exists. It reads a log and prints it as CSV to stdout af
 
 ```
 usage: cgar_log2csv [-h] [--start-time TIME] [--end-time TIME] [-l LOGFILE]
-                    [-f FILTER] [-s SEPARATOR] [--quote-strings]
-                    [--group-by {cgroup,attribute}]
-                    CONTROLLER CGROUP [CGROUP ...]
+                    [-f FILTER] [--unit-mem UNIT] [-s SEPARATOR] [-r]
+                    [--quote-strings] [--group-by {cgroup,attribute}]
+                    CGROUP [CGROUP ...]
 
 Extracts cgroup data from cgar collector log and prints them as CSV on stdout.
 
 positional arguments:
-  CONTROLLER            extract data for this cgroup controller
   CGROUP                extract data for this cgroup
 
 optional arguments:
@@ -289,20 +288,44 @@ optional arguments:
   -l LOGFILE, --log LOGFILE
                         logfile to parse (default: "/var/log/cgar/cgar")
   -f FILTER, --filter FILTER
-                        use only these controller attributes
+                        print only these attributes
+  --unit-mem UNIT       display memory in this unit (default: B(ytes))
   -s SEPARATOR, --separator SEPARATOR
                         separator for the output (default: ,
+  -r, --regex           use regular expressions for CGROUP argument
   --quote-strings       if strings in CSV output shall be quoted (default:
                         false
   --group-by {cgroup,attribute}
                         how cgroup attribute columns shall be grouped
                         (default: cgroup
 
-v0.1beta
+v0.3
 ```
 
 Such a file can easily be read into a spreadsheet program like LibreOffice or Excel to draw nice graphs for example.
 But you don't need an entire spreadsheet program to draw some graphs. This can easily be achieved with `gnuplot` as well.
+
+For those who love large tables the tool `cgar_csv2table` will read such a CSV file and print it as a nice human readable
+table on stdout.
+
+```
+usage: cgar_csv2table [-h] [-s SEPARATOR] CSVFILE
+
+Reads a CVS file created by `cgar_log2csv` and prints the data as table to
+stdout.
+
+positional arguments:
+  CSVFILE               the CSV file
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -s SEPARATOR, --separator SEPARATOR
+                        separator used in the CSV file (default: ,)
+
+v0.1
+```
+
+Happy invetigations!
 
 ## What To Do to Add New Cgroup Data?
 
@@ -323,5 +346,4 @@ exchange the binary on the system.
    |-|-|
    | 06.02.2023 | First release on GitHub. `cgar_collect` works, `cgar_log2csv` needs a bit polishing. |
    | 06.02.2023 | `cgar_log2csv`: v0.2 released
-
-...
+   | 08.02.2023 | new versions: `cgar_collect` v0.1.1, `cgar_log2csv` v0.3 and `cgar_csv2table` v0.1

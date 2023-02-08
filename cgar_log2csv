@@ -7,30 +7,42 @@ cgar_log2csv
 Reads `cgar_collect` log and prints data as CSV to stdout.
 
 
-If new controllers or controllerfiles need to be added:
-------------------------------------------------------
+If new controllers or controller files need to be added:
+-------------------------------------------------------
 
 1. Extend global dictionary `ATTRIBUTE_MAP`.
 
 2. Add support for the controller file in `convert()`
 
 
-Ideas:
-------
+Ideas/ToDos:
+-----------
+    - Implement `get_csv_line()` from `cgar_csv2table`.
     - Be more flexible with date and time.
     - Add converters (Byte to KiB, etc.).
-    - Support wildcards to easily select children (e.g. 'system.slice/*' or 'system.slice/*.service')
     - Check if the tool can handle logs where the content (added/removed cgroups/controllers) has changed.
+    - Sometimes when used in pipe, still a cosmetic message: 
+        Exception ignored in: <_io.TextIOWrapper name='<stdout>' mode='w' encoding='UTF-8'>
+        BrokenPipeError: [Errno 32] Broken pipe
+      appears. Would be nice to get rid of it.
 
 
 Changelog:
 ----------
     05.02.2023      v0.1beta        - first bits are done
-    05.02.2023      v0.2            - fixed bug where complex attributes (like `memory.pressure`)
+    06.02.2023      v0.2            - fixed bug where complex attributes (like `memory.pressure`)
                                       have not been resolved
                                     - introduced global cgroup attribute mapping for easier extensibility
                                     - fixed classic BrokenPipeError error
                                     - dared to remove beta status
+    08.02.2023      v0.3            - rework (removed 'controller' argument and instead enhanced
+                                      syntax of `-f` to allow fields of attribute files 
+                                    - introduced regex for cgroup arguments
+                                    - added support for 'memory.{min,high,max,swap.high,swap.max}'
+                                    - added support for memory conversion (`--unit-mem`)
+                                    - fixed a bug if `-l` is used
+                                    - fixed bug in `ATTRIBUTE_MAP`
+                                    - fixed a few cosmetic bugs in output like missing parenthesis
 """
 
 import argparse
@@ -39,34 +51,82 @@ import json
 import os
 import re
 import sys
-from pprint import pprint
 
-__version__ = '0.2'
 
-# This map must have listed each supported cgroup controller as key and as value a dictionary
-# with supported controller files as key and the output representation (column) as value.
-# Most of the time this will be a one to one mapping, but some complex files contain multiple
-# entries and shall be separated into individual columns.
+__version__ = '0.3'
+
+
+# This map must have listed each controller file as key and a list with the resolved
+# sub keys. Most of the time this will be a one to one mapping, but some files have 
+# multiple entries (sub keys), like `memory.stat` and need to be resolved. At the end
+# we net one name (table column) per value.
 # The `convert()` function must return the resolved columns!
-ATTRIBUTE_MAP = {'memory': {'memory.current': ['memory.current'], 
-                            'memory.swap.current': ['memory.swap.current'], 
-                            'memory.pressure' : ['memory.pressure::some_avg10', 
-                                                 'memory.pressure::some_avg60',
-                                                 'memory.pressure::some_avg300', 
-                                                 'memory.pressure::some_total',
-                                                 'memory.pressure::full_avg10',
-                                                 'memory.pressure::full_avg60',
-                                                 'memory.pressure::full_avg300',
-                                                 'memory.pressure::full_total']
-                           }
+ATTRIBUTE_MAP = {'memory.current': ['memory.current'], 
+                 'memory.swap.current': ['memory.swap.current'], 
+                 'memory.pressure' : ['memory.pressure::some_avg10', 
+                                        'memory.pressure::some_avg60',
+                                        'memory.pressure::some_avg300', 
+                                        'memory.pressure::some_total',
+                                        'memory.pressure::full_avg10',
+                                        'memory.pressure::full_avg60',
+                                        'memory.pressure::full_avg300',
+                                        'memory.pressure::full_total'],
+                 'memory.min': ['memory.min'],
+                 'memory.high': ['memory.high'],
+                 'memory.max': ['memory.max'],
+                 'memory.swap.high': ['memory.swap.high'],
+                 'memory.swap.max': ['memory.swap.max'],
+                 'memory.stat': ['memory.stat::anon',
+                                 'memory.stat::file',
+                                 'memory.stat::kernel_stack',
+                                 'memory.stat::pagetables',
+                                 'memory.stat::percpu',
+                                 'memory.stat::sock',
+                                 'memory.stat::shmem',
+                                 'memory.stat::file_mapped',
+                                 'memory.stat::file_dirty',
+                                 'memory.stat::file_writeback',
+                                 'memory.stat::swapcached',
+                                 'memory.stat::anon_thp',
+                                 'memory.stat::file_thp',
+                                 'memory.stat::shmem_thp',
+                                 'memory.stat::inactive_anon',
+                                 'memory.stat::active_anon',
+                                 'memory.stat::inactive_file',
+                                 'memory.stat::active_file',
+                                 'memory.stat::unevictable',
+                                 'memory.stat::slab_reclaimable',
+                                 'memory.stat::slab_unreclaimable',
+                                 'memory.stat::slab',
+                                 'memory.stat::workingset_refault_anon',
+                                 'memory.stat::workingset_refault_file',
+                                 'memory.stat::workingset_activate_anon',
+                                 'memory.stat::workingset_activate_file',
+                                 'memory.stat::workingset_restore_anon',
+                                 'memory.stat::workingset_restore_file',
+                                 'memory.stat::workingset_nodereclaim',
+                                 'memory.stat::pgfault',
+                                 'memory.stat::pgmajfault',
+                                 'memory.stat::pgrefill',
+                                 'memory.stat::pgscan',
+                                 'memory.stat::pgsteal',
+                                 'memory.stat::pgactivate',
+                                 'memory.stat::pgdeactivate',
+                                 'memory.stat::pglazyfree',
+                                 'memory.stat::pglazyfreed',
+                                 'memory.stat::thp_fault_alloc',
+                                 'memory.stat::thp_collapse_alloc'
+                                ]
                 }
 
 
 def argument_parse():
     """Evaluates the command line arguments."""
 
-    supported = {k: set(v.keys()) for (k, v) in ATTRIBUTE_MAP.items()}
-
+    # All supported attributes (with and without their sub keys).
+    supported = set(ATTRIBUTE_MAP.keys())
+    supported.update([item for sublist in ATTRIBUTE_MAP.values() for item in sublist])
+    
     parser = argparse. ArgumentParser(prog=os.path.basename(sys.argv[0]), 
                        description='Extracts cgroup data from cgar collector log and prints them as CSV on stdout.',
                        add_help=True,
@@ -95,35 +155,47 @@ def argument_parse():
                         default='/var/log/cgar/cgar',
                         help='logfile to parse (default: "/var/log/cgar/cgar")')    
     parser.add_argument('-f', '--filter',
+                        metavar='FILTER',
                         dest='filter',
                         type=str,
                         action='append',
+                        choices=supported,
                         required=False,
-                        help='use only these controller attributes')  
+                        help='print only these attributes')  
+    parser.add_argument('--unit-mem',
+                        metavar='UNIT',
+                        dest='memory_unit',
+                        type=str,
+                        action='store',
+                        choices=['B', 'kiB', 'MiB', 'GiB'],
+                        default='B',
+                        required=False,
+                        help='display memory in this unit (default: B(ytes))') 
     parser.add_argument('-s', '--separator',
                         dest='separator',
                         type=str,
                         action='store',
                         default=',',
                         required=False,
-                        help='separator for the output (default: ,')  
+                        help='separator for the output (default: ,)')  
+    parser.add_argument('-r', '--regex',
+                        dest='use_regex',
+                        action='store_true',
+                        default=False,
+                        required=False,
+                        help='use regular expressions for CGROUP argument')  
     parser.add_argument('--quote-strings',
                         dest='quotestrings',
                         action='store_true',
                         default=False,
                         required=False,
-                        help='if strings in CSV output shall be quoted (default: false')
+                        help='if strings in CSV output shall be quoted (default: false)')
     parser.add_argument('--group-by',
                         dest='group_by',
                         default='cgroup',
                         choices=['cgroup', 'attribute'],
                         required=False,
-                        help='how cgroup attribute columns shall be grouped (default: cgroup')  
-    parser.add_argument('controller',
-                        metavar='CONTROLLER',
-                        type=str,
-                        choices=supported,
-                        help='extract data for this cgroup controller')
+                        help='how cgroup attribute columns shall be grouped (default: cgroup)')  
     parser.add_argument('cgroups', 
                         metavar='CGROUP',
                         nargs='+',
@@ -141,31 +213,41 @@ def argument_parse():
         print(f'Error in time range: {err}')
         sys.exit(1)  
 
-    # Check that only valid attributes are listed for the filter
-    # and set the attributes we want to extract.
-    if args.filter:
-        if set(args.filter) - supported[args.controller]:
-            print(f'''Unsupported filter found! Only supported are: {', '.join(supported[args.controller])}''')
-            sys.exit(0)     
-        args.attributes = set(args.filter)
-    else:
-        args.attributes = supported[args.controller]
-
     # Check if the logfile is available.
-    if not os.path.isfile(args.logfile) and os.access(args.logfile):
+    if not os.path.isfile(args.logfile) and os.access(args.logfile, os.R_OK):
         print(f'Logfile "{args.logfile}" does not exists!')
         sys.exit(0)     
 
     return args
 
 
-def convert(attr: str, value: str) -> dict:
+def convert(attr: str, value: str, memory_unit='B') -> dict:
     """Takes a cgroup attribute value pair and returns a dict
     with the attribute columns and normalized values."""
 
+    def memconv(value, divisor):
+        if divisor == 1:
+            return int(value) 
+        else:
+            return float(f'{int(value)/divisor:.2f}')
+
+    # Set memory conversion.
+    if memory_unit == 'B':
+        divisor = 1
+    elif memory_unit == 'kiB':
+        divisor = 1024
+    elif memory_unit == 'MiB':
+        divisor = 1024*1024
+    elif memory_unit == 'GiB':
+        divisor = 1024*1024*1024
+    else:
+        print(f'Unknown memory unit "{memory_unit}"! Using "B(yte)".', file=sys.stderr)     
+        divisor = 1
+
     try:
-        if attr in ['memory.current', 'memory.swap.current']:
-            return { attr : int(value) } 
+        if attr in ['memory.current', 'memory.swap.current', 'memory.min']:
+            return {attr: memconv(value, divisor)} 
+
         elif attr == 'memory.pressure':
             # some avg10=0.00 avg60=0.00 avg300=0.00 total=0
             # full avg10=0.00 avg60=0.00 avg300=0.00 total=0
@@ -181,8 +263,20 @@ def convert(attr: str, value: str) -> dict:
                     f'{attr}::full_avg300': float(full_comp[3].split('=')[1]),
                     f'{attr}::full_total': float(full_comp[4].split('=')[1])
                    }
+        elif attr in ['memory.high', 'memory.max', 'memory.swap.high', 'memory.swap.max']:
+            if value == 'max':
+                return {attr: str(value)} 
+            else:
+                return {attr: memconv(value, divisor)} 
+        elif attr == 'memory.stat': 
+            # anon 1187840
+            # file 3383296
+            # kernel_stack 0
+            # ...
+            return dict(zip([f'{attr}::{a}' for a in value.split()[::2]], [memconv(v, divisor) for v in value.split()[1::2]]))
         else:
             print(f'Conversion of cgroup attribute found unknown attribute: {attr}', file=sys.stderr)           
+
     except Exception as err:
         print(f'Conversion of cgroup attribute value "{attr} = {value}" failed: {err}', file=sys.stderr)
         return None
@@ -207,17 +301,48 @@ def main():
     # Parse command line arguments.
     arguments = argument_parse()
 
+    # Do a pre-parsing of the logfile if regex (`-r`) are used.
+    # This is necessary to extract the header names matching the regex,
+    # because the headers must be printed first.
+    expanded_cgroups = set()
+    if arguments.use_regex:
+        try:
+            with open(arguments.logfile, 'r') as f:
+                for line in f:
+                    for timestamp, dataset in json.loads(line).items():
+
+                        # Expand cgroup arguments (regex) with current dataset.                        
+                        for cgroup_regex in arguments.cgroups:
+                            expanded_cgroups.update([cg for cg in dataset.keys() if re.search(cgroup_regex, cg)])
+            
+        except Exception as err:
+            print(f'Error reading "{arguments.logfile}": {err}')
+            sys.exit(1)           
+
     try: 
         with open(arguments.logfile, 'r') as f:
             
-            attrib2header = {attrib: attrib_resolved for controller_files in ATTRIBUTE_MAP.values() for attrib, attrib_resolved in controller_files.items()}
-            
-            # Build ordered headers.
-            attributes_resolved = [item for sublist in [attrib2header[attr] for attr in arguments.attributes] for item in sublist]
+            # We always need resolved attributes from now on (eg. `memory.stat::anon`... instead of `memory.stat`),
+            # therefore we convert the given filter into a resolved attributes set as well a set of the controller
+            # files associated with them. 
+            resolved_attributes = set()
+            controller_files = set()
+            for filter in arguments.filter:
+                if '::' in filter:
+                    resolved_attributes.add(filter)
+                    controller_files.add(filter.split('::')[0])
+                else:
+                    resolved_attributes.update(ATTRIBUTE_MAP[filter])
+                    controller_files.add(filter)
+
+            # Depending on the use of regex, the required cgroups are coming either directly
+            # from the cgroup argument or the (further above) resolved regular expressions for them.
+            required_cgroups = sorted(expanded_cgroups) if arguments.use_regex else set(arguments.cgroups)
+
             if arguments.group_by == 'attribute':
-                headers =[(cg, attrib) for attrib in attributes_resolved for cg in arguments.cgroups]
+                headers =[(cg, attrib) for attrib in resolved_attributes for cg in required_cgroups]
             else:
-                headers =[(cg, attrib) for cg in arguments.cgroups for attrib in attributes_resolved]
+                headers =[(cg, attrib) for cg in required_cgroups for attrib in resolved_attributes]
 
             # Print the CSV header first.
             print_csv(['timestamp'] + ['::'.join(h) for h in headers], separator=arguments.separator, quote_string=arguments.quotestrings)
@@ -236,27 +361,21 @@ def main():
                     if arguments.time_range[1] and timestamp_short > arguments.time_range[1]:
                         continue
 
-                    # ! Works, but the header still contain regex! They need expansion too. :-/
-                    # # Expand cgroup arguments (regex) with current dataset.
-                    # expanded_cgroups = []
-                    # for cgroup in arguments.cgroups:
-                    #     expanded_cgroups.extend([cg for cg in dataset.keys() if re.search(cgroup, cg)])
-                    
                     cgroup_data = {}
-                    for cgroup in arguments.cgroups:
-                    #for cgroup in expanded_cgroups:    # ! for a time when regex expansion works
+                    for cgroup in required_cgroups:
    
                         cgroup_data[cgroup] = {}
 
                         # Skip if the requested cgroup is not in the data set.
-                        # ! Do we need this after we expanded argument with dataset?
                         if cgroup not in dataset:
-                            print(f'Cgroup "{cgroup}" not in this data set.')
                             continue 
                         
-                        # Extract the attributes we want.
-                        for attribute in arguments.attributes:
-                            cgroup_data[cgroup].update(convert(attribute, dataset[cgroup][attribute]))
+                        # Get the values for all reguested controller files 
+                        for controller_file in controller_files:
+                            try:
+                                cgroup_data[cgroup].update(convert(controller_file, dataset[cgroup][controller_file], memory_unit=arguments.memory_unit))
+                            except TypeError:
+                                continue
                     
                     # Print a value row.    
                     row = [timestamp]
@@ -267,7 +386,7 @@ def main():
                             row.append('-')   # attribute not found in current dataset
                     print_csv(row, separator=arguments.separator, quote_string=arguments.quotestrings)
                 
-    except BrokenPipeError:
+    except (BrokenPipeError, IOError):
         # Handle BrokenPipe issue: https://docs.python.org/3/library/signal.html#note-on-sigpipe
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, sys.stdout.fileno())

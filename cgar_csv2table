@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+cgar_csv2table
+
+Reads a CVS file created by `cgar_log2csv` and prints the data as table to stdout.
+
+
+Ideas/ToDos:
+-----------
+    - Split the table title in two lines (one for cgroup, one for the attribute)
+      to get slimmer columns
+    - Implement filtering by start and end time.
+
+
+Changelog:
+----------
+    08.02.2023      v0.1            - first release
+"""
+
+import argparse
+import datetime
+import os
+import sys
+
+
+__version__ = '0.1'
+
+
+def argument_parse():
+    """Evaluates the command line arguments."""
+
+    # All supported attributes (with and without their sub keys).
+    
+    parser = argparse. ArgumentParser(prog=os.path.basename(sys.argv[0]), 
+                       description='Reads a CVS file created by `cgar_log2csv` and prints the data as table to stdout.',
+                       add_help=True,
+                       epilog=f'v{__version__}')
+
+    # Global flags and arguments.   
+    # parser.add_argument('--start-time',
+    #                     metavar='TIME',
+    #                     dest='start_time',
+    #                     type=str,
+    #                     action='store',
+    #                     required=False,
+    #                     help='only print data from this time forward (no timezone info)')   
+    # parser.add_argument('--end-time',
+    #                     metavar='TIME',
+    #                     dest='end_time',
+    #                     type=str,
+    #                     action='store',
+    #                     required=False,
+    #                     help='only print data to this time (no timezone info)')  
+    parser.add_argument('-s', '--separator',
+                        dest='separator',
+                        type=str,
+                        action='store',
+                        default=',',
+                        required=False,
+                        help='separator used in the CSV file (default: ,)')  
+    parser.add_argument('csvfile', 
+                        metavar='CSVFILE',
+                        type=str,
+                        help='the CSV file'),
+
+    args = parser.parse_args()
+
+    # Convert times into datetime objects
+    # try:
+    #     args.time_range = (
+    #         datetime.datetime.strptime(args.start_time, '%Y-%m-%dT%H:%M:%S') if args.start_time else None,
+    #         datetime.datetime.strptime(args.end_time, '%Y-%m-%dT%H:%M:%S') if args.end_time else None)
+    # except Exception as err:
+    #     print(f'Error in time range: {err}')
+    #     sys.exit(1)  
+
+    # Check if the CSV file is available.
+    if not os.path.isfile(args.csvfile) and os.access(args.csvfile, os.R_OK):
+        print(f'Logfile "{args.csvfile}" does not exists!')
+        sys.exit(0)     
+
+    return args
+
+
+def get_csv_line(filename: str) -> str:
+    """Iterates of the the given file."""
+    
+    try: 
+        with open(filename, 'r') as f:
+            for line in f:
+                yield line           
+    except Exception as err:
+        print(f'Error reading the CSV file: {err}')
+        sys.exit(2)  
+
+
+def main():
+
+    # Parse command line arguments.
+    arguments = argument_parse()    
+
+    try:
+
+        # Do a pre-parsing of the CSV file to get the width of each column.
+        column_width = []
+        for line in get_csv_line(arguments.csvfile):
+            for ix, length in enumerate([len(col.strip('"')) for col in line.strip().split(arguments.separator)]):
+                try:
+                    column_width[ix] = max(column_width[ix], length)
+                except IndexError:
+                    column_width.append(length)
+
+        # Walk trough the CSV file and print each line nicely
+        for lineno, line in enumerate(get_csv_line(arguments.csvfile)):
+            for ix, col in enumerate(line.strip().split(arguments.separator)):
+                align = '<' if ix == 0 else '>'
+                print(f'''{col.strip('"'): {align}{column_width[ix]}} ''',end='')
+            print()
+
+            # The header line.
+            if lineno == 0:
+                print(' '.join(['-' * l for l in column_width]))
+
+    except (BrokenPipeError, IOError):
+        # Handle BrokenPipe issue: https://docs.python.org/3/library/signal.html#note-on-sigpipe
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(0)
+
+    except Exception as err:
+        print(f'Sadly a runtime error ocurred: {err}')
+        sys.exit(3)  
+
+    # Bye.        
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

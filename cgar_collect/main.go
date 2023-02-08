@@ -14,6 +14,7 @@
 	Changelog:
 	----------
 		05.02.2023      v0.1        - first implementation
+		07.02.2023      v0.1.1      - Removed a harmless but annoying debugging output
 */
 
 package main
@@ -76,7 +77,6 @@ func main() {
 
 	// Start reading cgroup data concurrently.
 	for _, collection := range config.Collect {
-		fmt.Println(collection.Cgroup, collection.Depth, collection.Controllers)
 		wg_data.Add(1)
 		go cgroupcollect.GetFromTree(ch_data, &wg_data, collection.Cgroup, collection.Depth, collection.Controllers)
 	}
