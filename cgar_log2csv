@@ -17,7 +17,6 @@ If new controllers or controller files need to be added:
 
 Ideas/ToDos:
 -----------
-    - Not clear how to retrieve the cgroup root.
     - Be more flexible with date and time.
     - Add converters (Byte to KiB, etc.).
     - Check if the tool can handle logs where the content (added/removed cgroups/controllers) has changed.
@@ -44,6 +43,7 @@ Changelog:
                                     - fixed bug in `ATTRIBUTE_MAP`
                                     - fixed a few cosmetic bugs in output like missing parenthesis
     08.02.2023      v0.4            - now using an iterator to read the log file
+    08.02.2023      v0.4.1          - fixed bug if a cgroup is missing a controller file 
 
 """
 
@@ -55,7 +55,7 @@ import re
 import sys
 
 
-__version__ = '0.4'
+__version__ = '0.4.1'
 
 
 # This map must have listed each controller file as key and a list with the resolved
@@ -327,7 +327,7 @@ def main():
                     # Expand cgroup arguments (regex) with current dataset.                        
                     for cgroup_regex in arguments.cgroups:
                         expanded_cgroups.update([cg for cg in dataset.keys() if re.search(cgroup_regex, cg)])
-                
+                        
         # We always need resolved attributes from now on (eg. `memory.stat::anon`... instead of `memory.stat`),
         # therefore we convert the given filter into a resolved attributes set as well a set of the controller
         # files associated with them. 
@@ -368,21 +368,23 @@ def main():
                     continue
 
                 cgroup_data = {}
+                
                 for cgroup in required_cgroups:
 
                     cgroup_data[cgroup] = {}
 
                     # Skip if the requested cgroup is not in the data set.
                     if cgroup not in dataset:
-                        continue 
+                        continue
                     
-                    # Get the values for all reguested controller files 
+                    # Get the values for all requested controller files 
                     for controller_file in controller_files:
                         try:
-                            cgroup_data[cgroup].update(convert(controller_file, dataset[cgroup][controller_file], memory_unit=arguments.memory_unit))
+                            if controller_file in dataset[cgroup]:
+                                cgroup_data[cgroup].update(convert(controller_file, dataset[cgroup][controller_file], memory_unit=arguments.memory_unit))
                         except TypeError:
                             continue
-                
+
                 # Print a value row.    
                 row = [timestamp]
                 for cg, attrib in headers:
