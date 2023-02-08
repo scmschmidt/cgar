@@ -17,7 +17,7 @@ If new controllers or controller files need to be added:
 
 Ideas/ToDos:
 -----------
-    - Implement `get_csv_line()` from `cgar_csv2table`.
+    - Not clear how to retrieve the cgroup root.
     - Be more flexible with date and time.
     - Add converters (Byte to KiB, etc.).
     - Check if the tool can handle logs where the content (added/removed cgroups/controllers) has changed.
@@ -43,6 +43,8 @@ Changelog:
                                     - fixed a bug if `-l` is used
                                     - fixed bug in `ATTRIBUTE_MAP`
                                     - fixed a few cosmetic bugs in output like missing parenthesis
+    08.02.2023      v0.4            - now using an iterator to read the log file
+
 """
 
 import argparse
@@ -53,7 +55,7 @@ import re
 import sys
 
 
-__version__ = '0.3'
+__version__ = '0.4'
 
 
 # This map must have listed each controller file as key and a list with the resolved
@@ -220,6 +222,17 @@ def argument_parse():
 
     return args
 
+def get_log_line(filename: str) -> str:
+    """Iterates of the the given file."""
+    
+    try: 
+        with open(filename, 'r') as f:
+            for line in f:
+                yield line           
+    except Exception as err:
+        print(f'Error reading "{filename}": {err}')
+        sys.exit(2)  
+
 
 def convert(attr: str, value: str, memory_unit='B') -> dict:
     """Takes a cgroup attribute value pair and returns a dict
@@ -301,91 +314,84 @@ def main():
     # Parse command line arguments.
     arguments = argument_parse()
 
-    # Do a pre-parsing of the logfile if regex (`-r`) are used.
-    # This is necessary to extract the header names matching the regex,
-    # because the headers must be printed first.
-    expanded_cgroups = set()
-    if arguments.use_regex:
-        try:
-            with open(arguments.logfile, 'r') as f:
-                for line in f:
-                    for timestamp, dataset in json.loads(line).items():
-
-                        # Expand cgroup arguments (regex) with current dataset.                        
-                        for cgroup_regex in arguments.cgroups:
-                            expanded_cgroups.update([cg for cg in dataset.keys() if re.search(cgroup_regex, cg)])
-            
-        except Exception as err:
-            print(f'Error reading "{arguments.logfile}": {err}')
-            sys.exit(1)           
-
     try: 
-        with open(arguments.logfile, 'r') as f:
-            
-            # We always need resolved attributes from now on (eg. `memory.stat::anon`... instead of `memory.stat`),
-            # therefore we convert the given filter into a resolved attributes set as well a set of the controller
-            # files associated with them. 
-            resolved_attributes = set()
-            controller_files = set()
-            for filter in arguments.filter:
-                if '::' in filter:
-                    resolved_attributes.add(filter)
-                    controller_files.add(filter.split('::')[0])
-                else:
-                    resolved_attributes.update(ATTRIBUTE_MAP[filter])
-                    controller_files.add(filter)
 
-            # Depending on the use of regex, the required cgroups are coming either directly
-            # from the cgroup argument or the (further above) resolved regular expressions for them.
-            required_cgroups = sorted(expanded_cgroups) if arguments.use_regex else set(arguments.cgroups)
-
-            if arguments.group_by == 'attribute':
-                headers =[(cg, attrib) for attrib in resolved_attributes for cg in required_cgroups]
-            else:
-                headers =[(cg, attrib) for cg in required_cgroups for attrib in resolved_attributes]
-
-            # Print the CSV header first.
-            print_csv(['timestamp'] + ['::'.join(h) for h in headers], separator=arguments.separator, quote_string=arguments.quotestrings)
-
-            # Iterate over log (one JSON object each line).
-            for line in f:
-                
-                # Usually each line has only one timestamp and dataset, but
-                # maybe this will change.
+        # Do a pre-parsing of the logfile if regex (`-r`) are used.
+        # This is necessary to extract the header names matching the regex,
+        # because the headers must be printed first.
+        expanded_cgroups = set()
+        if arguments.use_regex:
+            for line in get_log_line(arguments.logfile):
                 for timestamp, dataset in json.loads(line).items():
+
+                    # Expand cgroup arguments (regex) with current dataset.                        
+                    for cgroup_regex in arguments.cgroups:
+                        expanded_cgroups.update([cg for cg in dataset.keys() if re.search(cgroup_regex, cg)])
                 
-                    # Check if entry is in given time range.
-                    timestamp_short = datetime.datetime.strptime(timestamp[:19], '%Y-%m-%dT%H:%M:%S')
-                    if arguments.time_range[0] and timestamp_short < arguments.time_range[0]:
-                        continue
-                    if arguments.time_range[1] and timestamp_short > arguments.time_range[1]:
-                        continue
+        # We always need resolved attributes from now on (eg. `memory.stat::anon`... instead of `memory.stat`),
+        # therefore we convert the given filter into a resolved attributes set as well a set of the controller
+        # files associated with them. 
+        resolved_attributes = set()
+        controller_files = set()
+        for filter in arguments.filter:
+            if '::' in filter:
+                resolved_attributes.add(filter)
+                controller_files.add(filter.split('::')[0])
+            else:
+                resolved_attributes.update(ATTRIBUTE_MAP[filter])
+                controller_files.add(filter)
 
-                    cgroup_data = {}
-                    for cgroup in required_cgroups:
-   
-                        cgroup_data[cgroup] = {}
+        # Depending on the use of regex, the required cgroups are coming either directly
+        # from the cgroup argument or the (further above) resolved regular expressions for them.
+        required_cgroups = sorted(expanded_cgroups) if arguments.use_regex else set(arguments.cgroups)
 
-                        # Skip if the requested cgroup is not in the data set.
-                        if cgroup not in dataset:
-                            continue 
-                        
-                        # Get the values for all reguested controller files 
-                        for controller_file in controller_files:
-                            try:
-                                cgroup_data[cgroup].update(convert(controller_file, dataset[cgroup][controller_file], memory_unit=arguments.memory_unit))
-                            except TypeError:
-                                continue
+        if arguments.group_by == 'attribute':
+            headers =[(cg, attrib) for attrib in resolved_attributes for cg in required_cgroups]
+        else:
+            headers =[(cg, attrib) for cg in required_cgroups for attrib in resolved_attributes]
+
+        # Print the CSV header first.
+        print_csv(['timestamp'] + ['::'.join(h) for h in headers], separator=arguments.separator, quote_string=arguments.quotestrings)
+
+        # Iterate over log (one JSON object each line).
+        for line in get_log_line(arguments.logfile):
+            
+            # Usually each line has only one timestamp and dataset, but
+            # maybe this will change.
+            for timestamp, dataset in json.loads(line).items():
+            
+                # Check if entry is in given time range.
+                timestamp_short = datetime.datetime.strptime(timestamp[:19], '%Y-%m-%dT%H:%M:%S')
+                if arguments.time_range[0] and timestamp_short < arguments.time_range[0]:
+                    continue
+                if arguments.time_range[1] and timestamp_short > arguments.time_range[1]:
+                    continue
+
+                cgroup_data = {}
+                for cgroup in required_cgroups:
+
+                    cgroup_data[cgroup] = {}
+
+                    # Skip if the requested cgroup is not in the data set.
+                    if cgroup not in dataset:
+                        continue 
                     
-                    # Print a value row.    
-                    row = [timestamp]
-                    for cg, attrib in headers:
-                        if attrib in cgroup_data[cg]: 
-                            row.append(cgroup_data[cg][attrib])
-                        else:
-                            row.append('-')   # attribute not found in current dataset
-                    print_csv(row, separator=arguments.separator, quote_string=arguments.quotestrings)
+                    # Get the values for all reguested controller files 
+                    for controller_file in controller_files:
+                        try:
+                            cgroup_data[cgroup].update(convert(controller_file, dataset[cgroup][controller_file], memory_unit=arguments.memory_unit))
+                        except TypeError:
+                            continue
                 
+                # Print a value row.    
+                row = [timestamp]
+                for cg, attrib in headers:
+                    if attrib in cgroup_data[cg]: 
+                        row.append(cgroup_data[cg][attrib])
+                    else:
+                        row.append('-')   # attribute not found in current dataset
+                print_csv(row, separator=arguments.separator, quote_string=arguments.quotestrings)
+            
     except (BrokenPipeError, IOError):
         # Handle BrokenPipe issue: https://docs.python.org/3/library/signal.html#note-on-sigpipe
         devnull = os.open(os.devnull, os.O_WRONLY)

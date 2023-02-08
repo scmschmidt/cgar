@@ -305,7 +305,7 @@ v0.3
 Such a file can easily be read into a spreadsheet program like LibreOffice or Excel to draw nice graphs for example.
 But you don't need an entire spreadsheet program to draw some graphs. This can easily be achieved with `gnuplot` as well.
 
-For those who love large tables the tool `cgar_csv2table` will read such a CSV file and print it as a nice human readable
+For those who love large tables, the tool `cgar_csv2table` will read such a CSV file and print it as a nice human readable
 table on stdout.
 
 ```
