@@ -325,7 +325,7 @@ optional arguments:
 v0.1
 ```
 
-Happy invetigations!
+Happy investigations!
 
 ## What To Do to Add New Cgroup Data?
 
@@ -347,4 +347,4 @@ exchange the binary on the system.
    | 06.02.2023 | First release on GitHub. `cgar_collect` works, `cgar_log2csv` needs a bit polishing. 
    | 06.02.2023 | `cgar_log2csv`: v0.2 released
    | 08.02.2023 | new versions: `cgar_collect` v0.1.1, `cgar_log2csv` v0.4.1 and `cgar_csv2table` v0.1
-   
+   | 09.02.2023 | `cgar_log2csv` v0.4.2 and `cgar_csv2table` v0.2

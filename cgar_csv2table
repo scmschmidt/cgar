@@ -9,14 +9,15 @@ Reads a CVS file created by `cgar_log2csv` and prints the data as table to stdou
 
 Ideas/ToDos:
 -----------
-    - Split the table title in two lines (one for cgroup, one for the attribute)
-      to get slimmer columns
     - Implement filtering by start and end time.
 
 
 Changelog:
 ----------
     08.02.2023      v0.1            - first release
+    09.02.2023      v0.2            - code cleaning
+                                    - table can now splitted into two lines (cgroup and attribute)
+                                      to save space and increase readability
 """
 
 import argparse
@@ -25,7 +26,7 @@ import os
 import sys
 
 
-__version__ = '0.1'
+__version__ = '0.2'
 
 
 def argument_parse():
@@ -60,6 +61,14 @@ def argument_parse():
                         default=',',
                         required=False,
                         help='separator used in the CSV file (default: ,)')  
+    parser.add_argument('-l', '--remove-level',
+                        dest='remove_level',
+                        action='store',
+                        type=int,
+                        choices=range(0,10),
+                        default=0,
+                        required=False,
+                        help='amount of directory levels removed from cgroup path for output (default: 0)')                          
     parser.add_argument('csvfile', 
                         metavar='CSVFILE',
                         type=str,
@@ -85,7 +94,7 @@ def argument_parse():
 
 
 def get_csv_line(filename: str) -> str:
-    """Iterates of the the given file."""
+    """Generator to walk through the given file."""
     
     try: 
         with open(filename, 'r') as f:
@@ -96,6 +105,23 @@ def get_csv_line(filename: str) -> str:
         sys.exit(2)  
 
 
+def split_csv_line(line: str, separator: str) -> list:
+    """Splits a CSV line into a list of cleaned fields."""
+
+    return [x.strip('\n\t "') for x in line.split(separator)]
+
+
+def length_of_line(line: str, separator: str) -> list:
+    """Gets a CSV line and returns a list with the length of each field."""
+
+    return [len(col) for col in split_csv_line(line ,separator)]
+
+def print_table_line(fields: list, alignment:str, widths: list) -> None:
+        """Prints the line formatted on stdout."""
+        for ix, col in enumerate(fields):
+            print(f'''{col:{alignment}{widths[ix]}} ''',end='')
+        print()
+
 def main():
 
     # Parse command line arguments.
@@ -103,25 +129,44 @@ def main():
 
     try:
 
+        # The generator for pre-reading the CSV file.
+        csv_file = get_csv_line(arguments.csvfile)
+
         # Do a pre-parsing of the CSV file to get the width of each column.
-        column_width = []
-        for line in get_csv_line(arguments.csvfile):
-            for ix, length in enumerate([len(col.strip('"')) for col in line.strip().split(arguments.separator)]):
+        # We also build the header, which gets transformed into two lines (cgroup and attribute)
+        # to save space and increase readability.
+        header = [[],[]]
+        for field in split_csv_line(next(csv_file), arguments.separator):
+            if '/' in field:
+                level = min(arguments.remove_level, field.count('/'))
+                field =  '/'.join(field.split('/')[level:])
+            if '::' in field:
+                one, two = field.split('::', maxsplit=1)
+                header[0].append(one)
+                header[1].append(two)
+            else:
+                header[0].append(field)
+                header[1].append('')
+
+        column_width = [max(x) for x in zip([len(col) for col in header[0]], [len(col) for col in header[1]])]
+        for line in csv_file:
+            for ix, length in enumerate(length_of_line(line, arguments.separator)):
                 try:
                     column_width[ix] = max(column_width[ix], length)
                 except IndexError:
                     column_width.append(length)
 
-        # Walk trough the CSV file and print each line nicely
-        for lineno, line in enumerate(get_csv_line(arguments.csvfile)):
-            for ix, col in enumerate(line.strip().split(arguments.separator)):
-                align = '<' if ix == 0 else '>'
-                print(f'''{col.strip('"'): {align}{column_width[ix]}} ''',end='')
-            print()
+        # Print the prepared header first.
+        print_table_line(header[0], '^', column_width)
+        print_table_line(header[1], '^', column_width)
+        print(' '.join(['-' * l for l in column_width]))
 
-            # The header line.
-            if lineno == 0:
-                print(' '.join(['-' * l for l in column_width]))
+        # Walk trough the CSV file and print each line nicely.
+        # The first line we drop, because we have printed the header already. 
+        csv_file = get_csv_line(arguments.csvfile)
+        next(csv_file)
+        for line in csv_file:
+            print_table_line(split_csv_line(line, arguments.separator), '>', column_width)
 
     except (BrokenPipeError, IOError):
         # Handle BrokenPipe issue: https://docs.python.org/3/library/signal.html#note-on-sigpipe

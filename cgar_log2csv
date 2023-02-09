@@ -42,8 +42,10 @@ Changelog:
                                     - fixed a bug if `-l` is used
                                     - fixed bug in `ATTRIBUTE_MAP`
                                     - fixed a few cosmetic bugs in output like missing parenthesis
-    08.02.2023      v0.4            - now using an iterator to read the log file
-    08.02.2023      v0.4.1          - fixed bug if a cgroup is missing a controller file 
+    08.02.2023      v0.4            - now using an generator to read the log file
+    08.02.2023      v0.4.1          - fixed bug if a cgroup is missing a controller file
+    09.02.2023      v0.4.2          - fixed a comment
+                                    - reduced number of digits on memory calculations from 2 to 1
 
 """
 
@@ -55,7 +57,7 @@ import re
 import sys
 
 
-__version__ = '0.4.1'
+__version__ = '0.4.2'
 
 
 # This map must have listed each controller file as key and a list with the resolved
@@ -222,8 +224,9 @@ def argument_parse():
 
     return args
 
+
 def get_log_line(filename: str) -> str:
-    """Iterates of the the given file."""
+    """Generator to walk through the given file."""
     
     try: 
         with open(filename, 'r') as f:
@@ -242,7 +245,7 @@ def convert(attr: str, value: str, memory_unit='B') -> dict:
         if divisor == 1:
             return int(value) 
         else:
-            return float(f'{int(value)/divisor:.2f}')
+            return float(f'{int(value)/divisor:.1f}')
 
     # Set memory conversion.
     if memory_unit == 'B':
