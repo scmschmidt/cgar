@@ -46,18 +46,20 @@ Changelog:
     08.02.2023      v0.4.1          - fixed bug if a cgroup is missing a controller file
     09.02.2023      v0.4.2          - fixed a comment
                                     - reduced number of digits on memory calculations from 2 to 1
+    11.02.2023      v0.5            - added support for xz compressed log files
 
 """
 
 import argparse
 import datetime
 import json
+import lzma
 import os
 import re
 import sys
 
 
-__version__ = '0.4.2'
+__version__ = '0.5'
 
 
 # This map must have listed each controller file as key and a list with the resolved
@@ -225,11 +227,19 @@ def argument_parse():
     return args
 
 
-def get_log_line(filename: str) -> str:
+def get_log_line(filename: str, format: str='text') -> str:
     """Generator to walk through the given file."""
-    
+
     try: 
-        with open(filename, 'r') as f:
+        # Check if the file is either text ot xz. 
+        with open(filename, 'rb') as f:
+            header = f.read(6)
+        if header == b'\xfd7zXZ\x00':
+            open_file = lzma.open
+        else:
+            open_file = open
+
+        with open_file(filename, 'r') as f:
             for line in f:
                 yield line           
     except Exception as err:
